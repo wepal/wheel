@@ -62,13 +62,14 @@ const initial = (values.length === 1 ? values[0].split(",") : values).map(text =
 
 // ---- Geometry (logical units; wheel center at CENTER_X/CENTER_Y) ----
 const WIDTH = 540, HEIGHT = 600, CENTER_X = WIDTH / 2, CENTER_Y = 334;
-const WHEEL_RADIUS = 250, PEG_CIRCLE_RADIUS = 244, PEG_RADIUS = 4.5, HUB_RADIUS = 42;   // wheel, peg circle, peg radius, button
+const WHEEL_RADIUS = 250, PEG_CIRCLE_RADIUS = 240, PEG_RADIUS = 6, HUB_RADIUS = 42;   // wheel, peg circle, peg radius, button
 const TEXT_OUTER = WHEEL_RADIUS * 0.93, TEXT_INNER = HUB_RADIUS * 1.25;
 const FULL_TURN = 2 * Math.PI;
 
 // ---- Physics ----
 let inertia;                           // moment of inertia, grows with the option count (see setOptions)
 const DRY_FRICTION = 0.16, VISCOUS_FRICTION = 0.15;   // axle friction: dry (rad/s²) and viscous (1/s)
+const PIVOT_RADIUS = 6;                 // radius of the flap pivot circle
 const FLAP_LENGTH = 70, TIP_RADIUS = 2, PIVOT_Y = -PEG_CIRCLE_RADIUS - FLAP_LENGTH + 1;  // flap: length, tip radius, mounting point
 const FLAP_STIFFNESS = 4000, FLAP_DAMPING = 19;       // flap bending stiffness and damping (tip mass 1)
 const CONTACT_STIFFNESS = 1e6, CONTACT_DAMPING = 600; // peg/flap contact stiffness and damping
@@ -195,7 +196,7 @@ function draw() {
   }
   context.stroke();
   context.beginPath();
-  context.arc(0, PIVOT_Y, 6, 0, FULL_TURN);
+  context.arc(0, PIVOT_Y, PIVOT_RADIUS, 0, FULL_TURN);
   context.fill();
 }
 
