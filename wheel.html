@@ -3,8 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Wheel of Fortune</title>
-<!-- MIT License. TODO: add the copyright holder and a LICENSE file to the repository. -->
+<title>Wheel</title>
 <style>
   html, body { height: 100%; margin: 0; overflow: hidden; }
   body { display: flex; align-items: center; justify-content: center; background: #fff; }
@@ -28,12 +27,14 @@
   }
   dialog {
     width: min(440px, calc(100vw - 40px)); box-sizing: border-box; padding: 20px;
-    border: 1px solid #ddd; border-radius: 8px; color: #222; font: 14px/1.5 system-ui, sans-serif;
+    border: 2px solid #666; border-radius: 8px; color: #222; font: 14px/1.5 system-ui, sans-serif;
   }
   dialog::backdrop { background: rgba(255, 255, 255, .75); }
   dialog label { display: block; margin-top: 14px; font-weight: 600; }
   dialog textarea, dialog input { width: 100%; box-sizing: border-box; font: inherit; }
   dialog p { margin: 14px 0 0; }
+  .row { display: flex; gap: 6px; }
+  .row input { flex: 1; min-width: 0; }
 </style>
 </head>
 <body>
@@ -50,16 +51,13 @@
   <label for="list">Options (one per line)</label>
   <textarea id="list" rows="6" spellcheck="false"></textarea>
   <label for="url">URL for the current options</label>
-  <input id="url" readonly>
+  <div class="row"><input id="url" readonly><button id="copy">Copy</button></div>
   <p>
-    Press the button in the center to spin the wheel; the segment under the red flap is the result.
-    The wheel updates as you type. Copy the URL above to reuse or share these options, or write it
-    yourself: <code>?options=A,B,C</code> (or repeat <code>options=A&amp;options=B</code>).
+    Copy the URL above to reuse or share your options.
   </p>
   <p>
     Released under the MIT License.<br>
-    <!-- TODO: replace with the real repository URL -->
-    <a href="https://github.com/TODO/TODO" target="_blank" rel="noopener">GitHub repository (TODO)</a>
+    <a href="https://github.com/wepal/wheel" target="_blank" rel="noopener">GitHub repository</a>
   </p>
 </dialog>
 
@@ -256,7 +254,17 @@ list.oninput = () => {
 };
 document.getElementById("close").onclick = () => dialog.close();
 url.onfocus = () => url.select();
-dialog.onclick = e => { if (e.target === dialog) dialog.close(); };   // click on the backdrop closes
+document.getElementById("copy").onclick = async e => {
+  try { await navigator.clipboard.writeText(url.value); }
+  catch { url.select(); document.execCommand("copy"); }   // fallback where the clipboard API is unavailable
+  e.target.textContent = "Copied";
+  setTimeout(() => e.target.textContent = "Copy", 1200);
+};
+dialog.onpointerdown = e => {                           // only a press outside the box closes it, not a drag ending there
+  const r = dialog.getBoundingClientRect();
+  if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) dialog.close();
+};
+canvas.onpointerdown = () => { omega = 0; };            // pressing the spinning wheel stops it at once
 
 addEventListener("resize", layout);
 setOptions(initial.length ? initial : ["Yes", "No"]);
