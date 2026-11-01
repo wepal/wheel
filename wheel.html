@@ -58,180 +58,182 @@
 "use strict";
 // Usage: wheel.html?options=Pizza,Pasta,Sushi  (or repeated: ?options=A&options=B)
 const values = new URLSearchParams(location.search).getAll("options");
-const initial = (values.length === 1 ? values[0].split(",") : values).map(s => s.trim()).filter(Boolean);
+const initial = (values.length === 1 ? values[0].split(",") : values).map(text => text.trim()).filter(Boolean);
 
-// ---- Geometry (logical units; wheel center at CX/CY) ----
-const W = 540, H = 600, CX = W / 2, CY = 334;
-const R = 250, RP = 244, PEG = 4.5, HUB = 42;   // wheel, peg circle, peg radius, button
-const TEXT_OUT = R * 0.93, TEXT_IN = HUB * 1.25;
-const TAU = 2 * Math.PI;
+// ---- Geometry (logical units; wheel center at CENTER_X/CENTER_Y) ----
+const WIDTH = 540, HEIGHT = 600, CENTER_X = WIDTH / 2, CENTER_Y = 334;
+const WHEEL_RADIUS = 250, PEG_CIRCLE_RADIUS = 244, PEG_RADIUS = 4.5, HUB_RADIUS = 42;   // wheel, peg circle, peg radius, button
+const TEXT_OUTER = WHEEL_RADIUS * 0.93, TEXT_INNER = HUB_RADIUS * 1.25;
+const FULL_TURN = 2 * Math.PI;
 
 // ---- Physics ----
 let inertia;                           // moment of inertia, grows with the option count (see setOptions)
-const DRY = 0.16, VISC = 0.15;         // axle friction: dry (rad/s²) and viscous (1/s)
-const L = 70, TIP = 2, PIVOT_Y = -RP - L + 1;  // flap: length, tip radius, mounting point
-const K = 4000, C = 19;                // flap bending stiffness and damping (tip mass 1)
-const KC = 1e6, CC = 600;              // peg/flap contact stiffness and damping
-const DT = 1 / 5000;
+const DRY_FRICTION = 0.16, VISCOUS_FRICTION = 0.15;   // axle friction: dry (rad/s²) and viscous (1/s)
+const FLAP_LENGTH = 70, TIP_RADIUS = 2, PIVOT_Y = -PEG_CIRCLE_RADIUS - FLAP_LENGTH + 1;  // flap: length, tip radius, mounting point
+const FLAP_STIFFNESS = 4000, FLAP_DAMPING = 19;       // flap bending stiffness and damping (tip mass 1)
+const CONTACT_STIFFNESS = 1e6, CONTACT_DAMPING = 600; // peg/flap contact stiffness and damping
+const TIME_STEP = 1 / 5000;
 
-let options, n, seg, fontSize;                 // current options, their count, segment angle, shared font size
-let theta = Math.random() * TAU, omega = 0;    // wheel angle (clockwise) and angular velocity
-let x = 0, xd = 0;                             // sideways deflection of the flap tip and its velocity
-let last = 0, acc = 0, still = 0, scale = 1;
+let options, count, segmentAngle, fontSize;    // current options, their count, segment angle, shared font size
+let theta = Math.random() * FULL_TURN, omega = 0;  // wheel angle (clockwise) and angular velocity
+let flapX = 0, flapVelocity = 0;               // sideways deflection of the flap tip and its velocity
+let lastTime = 0, accumulator = 0, stillTime = 0, scale = 1;
 
 const stage = document.getElementById("stage");
 const canvas = document.querySelector("canvas");
-const btn = document.getElementById("spin");
+const spinButton = document.getElementById("spin");
 const dialog = document.getElementById("dialog");
 const list = document.getElementById("list");
-const url = document.getElementById("url");
-const ctx = canvas.getContext("2d");
+const urlLink = document.getElementById("url");
+const context = canvas.getContext("2d");
 
 const font = size => `500 ${size}px system-ui, sans-serif`;
-const wrap = a => a - TAU * Math.round(a / TAU);
+const wrap = angle => angle - FULL_TURN * Math.round(angle / FULL_TURN);
 
 // Applies a new option list and picks one font size so that every option fits radially into its segment.
 function setOptions(next) {
   options = next;
-  url.href = optionsUrl();
-  n = next.length;
-  seg = TAU / n;
-  inertia = 10 * n * RP * RP;   // more pegs = more flap drag per turn; a heavier wheel keeps the spin time about constant
-  ctx.font = font(100);
-  const g = 1.8 * Math.sin(Math.min(seg, Math.PI) / 2);   // usable segment width per unit of radius
-  fontSize = Math.min(R * 0.16, ...options.map(o => {
-    const m = ctx.measureText(o).width / 100;             // text width per unit of font size
-    return Math.min(g * TEXT_OUT / (1.25 + g * m), (TEXT_OUT - TEXT_IN) / m);
+  urlLink.href = optionsUrl();
+  count = next.length;
+  segmentAngle = FULL_TURN / count;
+  inertia = 10 * count * PEG_CIRCLE_RADIUS * PEG_CIRCLE_RADIUS;   // more pegs = more flap drag per turn; a heavier wheel keeps the spin time about constant
+  context.font = font(100);
+  const widthFactor = 1.8 * Math.sin(Math.min(segmentAngle, Math.PI) / 2);   // usable segment width per unit of radius
+  fontSize = Math.min(WHEEL_RADIUS * 0.16, ...options.map(option => {
+    const textWidth = context.measureText(option).width / 100;             // text width per unit of font size
+    return Math.min(widthFactor * TEXT_OUTER / (1.25 + widthFactor * textWidth), (TEXT_OUTER - TEXT_INNER) / textWidth);
   }));
 }
 
 function optionsUrl() {
-  const q = options.some(o => o.includes(","))
-    ? options.map(o => "options=" + encodeURIComponent(o)).join("&")
+  const query = options.some(option => option.includes(","))
+    ? options.map(option => "options=" + encodeURIComponent(option)).join("&")
     : "options=" + options.map(encodeURIComponent).join(",");
-  return location.href.split(/[?#]/)[0] + "?" + q;
+  return location.href.split(/[?#]/)[0] + "?" + query;
 }
 
 function step() {
-  const s = Math.sqrt(L * L - x * x), ty = PIVOT_Y + s, slope = -x / s;  // the tip moves on a circular arc
-  let fx = -K * x - C * xd, torque = 0;
-  for (let j = 0; j < n; j++) {
-    const f = wrap(theta + j * seg);                    // peg angle relative to "top"
-    if (Math.abs(f) > 0.6) continue;
-    const c = Math.cos(f), sn = Math.sin(f);
-    const dx = x - RP * sn, dy = ty + RP * c, d = Math.hypot(dx, dy), pen = PEG + TIP - d;
-    if (pen <= 0) continue;
-    const nx = dx / d, ny = dy / d;
-    const vn = (xd - omega * RP * c) * nx + (slope * xd - omega * RP * sn) * ny;
-    const F = Math.max(0, KC * pen - CC * vn);          // contact force (spring + damper)
-    fx += F * (nx + slope * ny);                        // acts on the flap tip
-    torque -= F * RP * (nx * c + ny * sn);              // reaction force brakes the wheel
+  const flapHeight = Math.sqrt(FLAP_LENGTH * FLAP_LENGTH - flapX * flapX), tipY = PIVOT_Y + flapHeight, slope = -flapX / flapHeight;  // the tip moves on a circular arc
+  let flapForce = -FLAP_STIFFNESS * flapX - FLAP_DAMPING * flapVelocity, torque = 0;
+  for (let j = 0; j < count; j++) {
+    const pegAngle = wrap(theta + j * segmentAngle);    // peg angle relative to "top"
+    if (Math.abs(pegAngle) > 0.6) continue;
+    const cosine = Math.cos(pegAngle), sine = Math.sin(pegAngle);
+    const deltaX = flapX - PEG_CIRCLE_RADIUS * sine, deltaY = tipY + PEG_CIRCLE_RADIUS * cosine;
+    const distance = Math.hypot(deltaX, deltaY), penetration = PEG_RADIUS + TIP_RADIUS - distance;
+    if (penetration <= 0) continue;
+    const normalX = deltaX / distance, normalY = deltaY / distance;
+    const normalSpeed = (flapVelocity - omega * PEG_CIRCLE_RADIUS * cosine) * normalX
+      + (slope * flapVelocity - omega * PEG_CIRCLE_RADIUS * sine) * normalY;
+    const contactForce = Math.max(0, CONTACT_STIFFNESS * penetration - CONTACT_DAMPING * normalSpeed);  // contact force (spring + damper)
+    flapForce += contactForce * (normalX + slope * normalY);                    // acts on the flap tip
+    torque -= contactForce * PEG_CIRCLE_RADIUS * (normalX * cosine + normalY * sine);  // reaction force brakes the wheel
   }
-  xd += fx * DT;
-  x = Math.max(-0.9 * L, Math.min(0.9 * L, x + xd * DT));
-  omega += (torque / inertia - DRY * Math.tanh(omega / 0.05) - VISC * omega) * DT;
-  theta += omega * DT;
+  flapVelocity += flapForce * TIME_STEP;
+  flapX = Math.max(-0.9 * FLAP_LENGTH, Math.min(0.9 * FLAP_LENGTH, flapX + flapVelocity * TIME_STEP));
+  omega += (torque / inertia - DRY_FRICTION * Math.tanh(omega / 0.05) - VISCOUS_FRICTION * omega) * TIME_STEP;
+  theta += omega * TIME_STEP;
 }
 
 function draw() {
-  const dpr = devicePixelRatio || 1;
-  ctx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
-  ctx.clearRect(0, 0, W, H);
-  ctx.translate(CX, CY);
+  const pixelRatio = devicePixelRatio || 1;
+  context.setTransform(pixelRatio * scale, 0, 0, pixelRatio * scale, 0, 0);
+  context.clearRect(0, 0, WIDTH, HEIGHT);
+  context.translate(CENTER_X, CENTER_Y);
 
-  ctx.save();
-  ctx.rotate(theta);
-  ctx.font = font(fontSize);
-  ctx.textAlign = "right";
-  ctx.textBaseline = "middle";
-  options.forEach((o, i) => {
-    const a0 = i * seg - Math.PI / 2;
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.arc(0, 0, R, a0, a0 + seg);
-    ctx.fillStyle = `hsl(${360 * i / n} 55% 85%)`;
-    ctx.fill();
-    ctx.save();
-    ctx.rotate(a0 + seg / 2);                            // text runs radially outward
-    ctx.fillStyle = "#222";
-    ctx.fillText(o, TEXT_OUT, 0);
-    ctx.restore();
+  context.save();
+  context.rotate(theta);
+  context.font = font(fontSize);
+  context.textAlign = "right";
+  context.textBaseline = "middle";
+  options.forEach((option, i) => {
+    const startAngle = i * segmentAngle - Math.PI / 2;
+    context.beginPath();
+    context.moveTo(0, 0);
+    context.arc(0, 0, WHEEL_RADIUS, startAngle, startAngle + segmentAngle);
+    context.fillStyle = `hsl(${360 * i / count} 55% 85%)`;
+    context.fill();
+    context.save();
+    context.rotate(startAngle + segmentAngle / 2);       // text runs radially outward
+    context.fillStyle = "#222";
+    context.fillText(option, TEXT_OUTER, 0);
+    context.restore();
   });
-  ctx.strokeStyle = ctx.fillStyle = "#333";
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.arc(0, 0, R, 0, TAU);
-  ctx.stroke();
-  for (let j = 0; j < n; j++) {                          // pegs between the options
-    ctx.save();
-    ctx.rotate(j * seg);
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(0, -R);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(0, -RP, PEG, 0, TAU);
-    ctx.fill();
-    ctx.restore();
+  context.strokeStyle = context.fillStyle = "#333";
+  context.lineWidth = 3;
+  context.beginPath();
+  context.arc(0, 0, WHEEL_RADIUS, 0, FULL_TURN);
+  context.stroke();
+  for (let j = 0; j < count; j++) {                      // pegs between the options
+    context.save();
+    context.rotate(j * segmentAngle);
+    context.beginPath();
+    context.moveTo(0, 0);
+    context.lineTo(0, -WHEEL_RADIUS);
+    context.stroke();
+    context.beginPath();
+    context.arc(0, -PEG_CIRCLE_RADIUS, PEG_RADIUS, 0, FULL_TURN);
+    context.fill();
+    context.restore();
   }
-  ctx.beginPath();
-  ctx.arc(0, 0, 10, 0, TAU);
-  ctx.fill();
-  ctx.restore();
+  context.beginPath();
+  context.arc(0, 0, 10, 0, FULL_TURN);
+  context.fill();
+  context.restore();
 
-  // Flexible flap: bending curve of a cantilever beam with tip deflection x
-  const s = Math.sqrt(L * L - x * x);
-  ctx.strokeStyle = ctx.fillStyle = "#c0392b";
-  ctx.lineWidth = 4;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  ctx.beginPath();
-  for (let u = 0; u <= 1.001; u += 0.1) {
-    ctx[u ? "lineTo" : "moveTo"](x * (3 * u * u - u ** 3) / 2, PIVOT_Y + s * u);
+  // Flexible flap: bending curve of a cantilever beam with tip deflection flapX
+  const flapHeight = Math.sqrt(FLAP_LENGTH * FLAP_LENGTH - flapX * flapX);
+  context.strokeStyle = context.fillStyle = "#c0392b";
+  context.lineWidth = 4;
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  context.beginPath();
+  for (let along = 0; along <= 1.001; along += 0.1) {
+    context[along ? "lineTo" : "moveTo"](flapX * (3 * along * along - along ** 3) / 2, PIVOT_Y + flapHeight * along);
   }
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.arc(0, PIVOT_Y, 6, 0, TAU);
-  ctx.fill();
+  context.stroke();
+  context.beginPath();
+  context.arc(0, PIVOT_Y, 6, 0, FULL_TURN);
+  context.fill();
 }
 
 function layout() {
-  const dpr = devicePixelRatio || 1;
-  scale = Math.min(innerWidth / W, innerHeight / H);
-  canvas.width = Math.round(W * scale * dpr);
-  canvas.height = Math.round(H * scale * dpr);
-  stage.style.width = canvas.style.width = W * scale + "px";
-  stage.style.height = canvas.style.height = H * scale + "px";
-  Object.assign(btn.style, {
-    left: CX * scale + "px", top: CY * scale + "px",
-    width: 2 * HUB * scale + "px", height: 2 * HUB * scale + "px",
-    fontSize: 0.44 * HUB * scale + "px",
+  const pixelRatio = devicePixelRatio || 1;
+  scale = Math.min(innerWidth / WIDTH, innerHeight / HEIGHT);
+  canvas.width = Math.round(WIDTH * scale * pixelRatio);
+  canvas.height = Math.round(HEIGHT * scale * pixelRatio);
+  stage.style.width = canvas.style.width = WIDTH * scale + "px";
+  stage.style.height = canvas.style.height = HEIGHT * scale + "px";
+  Object.assign(spinButton.style, {
+    left: CENTER_X * scale + "px", top: CENTER_Y * scale + "px",
+    width: 2 * HUB_RADIUS * scale + "px", height: 2 * HUB_RADIUS * scale + "px",
+    fontSize: 0.44 * HUB_RADIUS * scale + "px",
   });
   draw();
 }
 
 function frame(now) {
-  acc += Math.min(Math.max((now - last) / 1000, 0), 0.05);
-  last = now;
-  for (; acc >= DT; acc -= DT) {
+  accumulator += Math.min(Math.max((now - lastTime) / 1000, 0), 0.05);
+  lastTime = now;
+  for (; accumulator >= TIME_STEP; accumulator -= TIME_STEP) {
     step();
-    still = Math.abs(omega) < 0.01 && Math.abs(xd) < 1 ? still + DT : 0;
+    stillTime = Math.abs(omega) < 0.01 && Math.abs(flapVelocity) < 1 ? stillTime + TIME_STEP : 0;
   }
   draw();
-  if (still > 0.3) {                                     // wheel stopped, flap rests between two pegs
+  if (stillTime > 0.3) {                                 // wheel stopped, flap rests between two pegs
     omega = 0;
     theta = wrap(theta);
-    btn.hidden = false;
+    spinButton.hidden = false;
   } else {
     requestAnimationFrame(frame);
   }
 }
 
-btn.onclick = () => {
+spinButton.onclick = () => {
   omega = 10 + 6 * Math.random();
-  btn.hidden = true;
-  last = performance.now();
-  acc = still = 0;
+  spinButton.hidden = true;
+  lastTime = performance.now();
+  accumulator = stillTime = 0;
   requestAnimationFrame(frame);
 };
 
@@ -240,14 +242,14 @@ document.getElementById("open").onclick = () => {
   dialog.showModal();
 };
 list.oninput = () => {
-  const next = list.value.split("\n").map(s => s.trim()).filter(Boolean);
+  const next = list.value.split("\n").map(text => text.trim()).filter(Boolean);
   if (next.length) setOptions(next);                     // keep the old options while the field is empty
   draw();
 };
 document.getElementById("close").onclick = () => dialog.close();
-dialog.onpointerdown = e => {                           // only a press outside the box closes it, not a drag ending there
-  const r = dialog.getBoundingClientRect();
-  if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) dialog.close();
+dialog.onpointerdown = event => {                       // only a press outside the box closes it, not a drag ending there
+  const rect = dialog.getBoundingClientRect();
+  if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) dialog.close();
 };
 canvas.onpointerdown = () => { omega = 0; };            // pressing the spinning wheel stops it at once
 
