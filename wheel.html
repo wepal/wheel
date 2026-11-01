@@ -31,10 +31,8 @@
   }
   dialog::backdrop { background: rgba(255, 255, 255, .75); }
   dialog label { display: block; margin-top: 14px; font-weight: 600; }
-  dialog textarea, dialog input { width: 100%; box-sizing: border-box; font: inherit; }
+  dialog textarea { width: 100%; box-sizing: border-box; font: inherit; }
   dialog p { margin: 14px 0 0; }
-  .row { display: flex; gap: 6px; }
-  .row input { flex: 1; min-width: 0; }
 </style>
 </head>
 <body>
@@ -50,8 +48,7 @@
   <button id="close" aria-label="Close">&times;</button>
   <label for="list">Options (one per line)</label>
   <textarea id="list" rows="6" spellcheck="false"></textarea>
-  <label for="url">URL for the current options</label>
-  <div class="row"><input id="url" readonly><button id="copy">Copy</button></div>
+  <p><a id="url">URL for the current options</a></p>
   <p>
     <a href="https://github.com/wepal/wheel" target="_blank" rel="noopener">GitHub repository</a>
   </p>
@@ -96,6 +93,7 @@ const wrap = a => a - TAU * Math.round(a / TAU);
 // Applies a new option list and picks one font size so that every option fits radially into its segment.
 function setOptions(next) {
   options = next;
+  url.href = optionsUrl();
   n = next.length;
   seg = TAU / n;
   inertia = 10 * n * RP * RP;   // more pegs = more flap drag per turn; a heavier wheel keeps the spin time about constant
@@ -239,23 +237,14 @@ btn.onclick = () => {
 
 document.getElementById("open").onclick = () => {
   list.value = options.join("\n");
-  url.value = optionsUrl();
   dialog.showModal();
 };
 list.oninput = () => {
   const next = list.value.split("\n").map(s => s.trim()).filter(Boolean);
   if (next.length) setOptions(next);                     // keep the old options while the field is empty
-  url.value = optionsUrl();
   draw();
 };
 document.getElementById("close").onclick = () => dialog.close();
-url.onfocus = () => url.select();
-document.getElementById("copy").onclick = async e => {
-  try { await navigator.clipboard.writeText(url.value); }
-  catch { url.select(); document.execCommand("copy"); }   // fallback where the clipboard API is unavailable
-  e.target.textContent = "Copied";
-  setTimeout(() => e.target.textContent = "Copy", 1200);
-};
 dialog.onpointerdown = e => {                           // only a press outside the box closes it, not a drag ending there
   const r = dialog.getBoundingClientRect();
   if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) dialog.close();
