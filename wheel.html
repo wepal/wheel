@@ -1,78 +1,129 @@
 <!DOCTYPE html>
-<html lang="de">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Glücksrad</title>
+<title>Wheel of Fortune</title>
+<!-- MIT License. TODO: add the copyright holder and a LICENSE file to the repository. -->
 <style>
   html, body { height: 100%; margin: 0; overflow: hidden; }
   body { display: flex; align-items: center; justify-content: center; background: #fff; }
   #stage { position: relative; }
   canvas { display: block; }
-  button {
+  #spin {
     position: absolute; transform: translate(-50%, -50%);
     border: 0; border-radius: 50%; background: #222; color: #fff;
     font: 600 16px system-ui, sans-serif; cursor: pointer;
   }
+  #open {
+    position: fixed; right: 12px; bottom: 12px; width: 28px; height: 28px;
+    border: 1px solid #bbb; border-radius: 50%; background: none; color: #999;
+    font: 14px system-ui, sans-serif; cursor: pointer; opacity: .6;
+  }
+  #open:hover { opacity: 1; }
+  dialog {
+    width: min(440px, calc(100vw - 40px)); box-sizing: border-box; padding: 20px;
+    border: 1px solid #ddd; border-radius: 8px; color: #222; font: 14px/1.5 system-ui, sans-serif;
+  }
+  dialog::backdrop { background: rgba(255, 255, 255, .75); }
+  dialog label { display: block; margin-top: 14px; font-weight: 600; }
+  dialog textarea, dialog input { width: 100%; box-sizing: border-box; font: inherit; }
+  dialog p { margin: 14px 0 0; }
+  dialog form { margin-top: 18px; text-align: right; }
 </style>
 </head>
 <body>
-<div id="stage"><canvas></canvas><button>Drehen</button></div>
+<div id="stage"><canvas></canvas><button id="spin">Spin</button></div>
+<button id="open" title="Options &amp; info">i</button>
+
+<dialog id="dialog">
+  <label for="list">Options (one per line)</label>
+  <textarea id="list" rows="6" spellcheck="false"></textarea>
+  <label for="url">URL for the current options</label>
+  <input id="url" readonly>
+  <p>
+    Press the button in the center to spin the wheel; the segment under the red flap is the result.
+    The wheel updates as you type. Copy the URL above to reuse or share these options, or write it
+    yourself: <code>?options=A,B,C</code> (or repeat <code>options=A&amp;options=B</code>).
+  </p>
+  <p>
+    Released under the MIT License.<br>
+    <!-- TODO: replace with the real repository URL -->
+    <a href="https://github.com/TODO/TODO" target="_blank" rel="noopener">GitHub repository (TODO)</a>
+  </p>
+  <form method="dialog"><button>Close</button></form>
+</dialog>
+
 <script>
 "use strict";
-// Aufruf: gluecksrad.html?optionen=Pizza,Pasta,Sushi  (auch mehrfach: ?optionen=A&optionen=B)
-const params = new URLSearchParams(location.search);
-const options = params.getAll("optionen").flatMap(s => s.split(",")).map(s => s.trim()).filter(Boolean);
-if (!options.length) options.push("Ja", "Nein");
+// Usage: wheel.html?options=Pizza,Pasta,Sushi  (or repeated: ?options=A&options=B)
+const values = new URLSearchParams(location.search).getAll("options");
+const initial = (values.length === 1 ? values[0].split(",") : values).map(s => s.trim()).filter(Boolean);
 
-// ---- Geometrie (logische Einheiten; Radmittelpunkt bei CX/CY) ----
+// ---- Geometry (logical units; wheel center at CX/CY) ----
 const W = 540, H = 600, CX = W / 2, CY = 334;
-const R = 250, RP = 253, PEG = 4.5, HUB = 42;   // Rad, Stangenkreis, Stangenradius, Button
+const R = 250, RP = 253, PEG = 4.5, HUB = 42;   // wheel, peg circle, peg radius, button
 const TEXT_OUT = R * 0.93, TEXT_IN = HUB * 1.25;
-const TAU = 2 * Math.PI, n = options.length, seg = TAU / n;
+const TAU = 2 * Math.PI;
 
-// ---- Physik ----
-const I_WHEEL = 40 * RP * RP;          // Trägheitsmoment (entspricht 40 Masseneinheiten am Rand)
-const DRY = 0.16, VISC = 0.15;         // Lagerreibung: trocken (rad/s²) und viskos (1/s)
-const L = 70, TIP = 2, PIVOT_Y = -RP - L + 1;  // Leiste: Länge, Spitzenradius, Aufhängung
-const K = 4000, C = 19;                // Biegesteifigkeit und Dämpfung der Leiste (Spitzenmasse 1)
-const KC = 1e6, CC = 600;              // Kontaktsteifigkeit und -dämpfung Stange/Leiste
+// ---- Physics ----
+const I_WHEEL = 40 * RP * RP;          // moment of inertia (equivalent to 40 mass units at the rim)
+const DRY = 0.16, VISC = 0.15;         // axle friction: dry (rad/s²) and viscous (1/s)
+const L = 70, TIP = 2, PIVOT_Y = -RP - L + 1;  // flap: length, tip radius, mounting point
+const K = 4000, C = 19;                // flap bending stiffness and damping (tip mass 1)
+const KC = 1e6, CC = 600;              // peg/flap contact stiffness and damping
 const DT = 1 / 5000;
 
-let theta = Math.random() * TAU, omega = 0;    // Raddrehwinkel (im Uhrzeigersinn) und Winkelgeschwindigkeit
-let x = 0, xd = 0;                             // seitliche Auslenkung der Leistenspitze und ihre Geschwindigkeit
+let options, n, seg, fontSize;                 // current options, their count, segment angle, shared font size
+let theta = Math.random() * TAU, omega = 0;    // wheel angle (clockwise) and angular velocity
+let x = 0, xd = 0;                             // sideways deflection of the flap tip and its velocity
 let last = 0, acc = 0, still = 0, scale = 1;
 
 const stage = document.getElementById("stage");
 const canvas = document.querySelector("canvas");
-const btn = document.querySelector("button");
+const btn = document.getElementById("spin");
+const dialog = document.getElementById("dialog");
+const list = document.getElementById("list");
+const url = document.getElementById("url");
 const ctx = canvas.getContext("2d");
 
-// Einheitliche Schriftgröße: so groß, dass jede Option radial in ihr Segment passt.
 const font = size => `500 ${size}px system-ui, sans-serif`;
-ctx.font = font(100);
-const g = 1.8 * Math.sin(Math.min(seg, Math.PI) / 2);   // nutzbare Segmentbreite je Radiuseinheit
-const fontSize = Math.min(R * 0.16, ...options.map(o => {
-  const m = ctx.measureText(o).width / 100;             // Textbreite je Schriftgröße
-  return Math.min(g * TEXT_OUT / (1.25 + g * m), (TEXT_OUT - TEXT_IN) / m);
-}));
-
 const wrap = a => a - TAU * Math.round(a / TAU);
 
+// Applies a new option list and picks one font size so that every option fits radially into its segment.
+function setOptions(next) {
+  options = next;
+  n = next.length;
+  seg = TAU / n;
+  ctx.font = font(100);
+  const g = 1.8 * Math.sin(Math.min(seg, Math.PI) / 2);   // usable segment width per unit of radius
+  fontSize = Math.min(R * 0.16, ...options.map(o => {
+    const m = ctx.measureText(o).width / 100;             // text width per unit of font size
+    return Math.min(g * TEXT_OUT / (1.25 + g * m), (TEXT_OUT - TEXT_IN) / m);
+  }));
+}
+
+function optionsUrl() {
+  const q = options.some(o => o.includes(","))
+    ? options.map(o => "options=" + encodeURIComponent(o)).join("&")
+    : "options=" + options.map(encodeURIComponent).join(",");
+  return location.href.split(/[?#]/)[0] + "?" + q;
+}
+
 function step() {
-  const s = Math.sqrt(L * L - x * x), ty = PIVOT_Y + s, slope = -x / s;  // Spitze läuft auf einem Kreisbogen
+  const s = Math.sqrt(L * L - x * x), ty = PIVOT_Y + s, slope = -x / s;  // the tip moves on a circular arc
   let fx = -K * x - C * xd, torque = 0;
   for (let j = 0; j < n; j++) {
-    const f = wrap(theta + j * seg);                    // Winkel der Stange relativ zu "oben"
+    const f = wrap(theta + j * seg);                    // peg angle relative to "top"
     if (Math.abs(f) > 0.6) continue;
     const c = Math.cos(f), sn = Math.sin(f);
     const dx = x - RP * sn, dy = ty + RP * c, d = Math.hypot(dx, dy), pen = PEG + TIP - d;
     if (pen <= 0) continue;
     const nx = dx / d, ny = dy / d;
     const vn = (xd - omega * RP * c) * nx + (slope * xd - omega * RP * sn) * ny;
-    const F = Math.max(0, KC * pen - CC * vn);          // Kontaktkraft (Feder + Dämpfer)
-    fx += F * (nx + slope * ny);                        // wirkt auf die Leistenspitze
-    torque -= F * RP * (nx * c + ny * sn);              // Gegenkraft bremst das Rad
+    const F = Math.max(0, KC * pen - CC * vn);          // contact force (spring + damper)
+    fx += F * (nx + slope * ny);                        // acts on the flap tip
+    torque -= F * RP * (nx * c + ny * sn);              // reaction force brakes the wheel
   }
   xd += fx * DT;
   x = Math.max(-0.9 * L, Math.min(0.9 * L, x + xd * DT));
@@ -99,7 +150,7 @@ function draw() {
     ctx.fillStyle = `hsl(${360 * i / n} 55% 85%)`;
     ctx.fill();
     ctx.save();
-    ctx.rotate(a0 + seg / 2);                            // Text läuft radial nach außen
+    ctx.rotate(a0 + seg / 2);                            // text runs radially outward
     ctx.fillStyle = "#222";
     ctx.fillText(o, TEXT_OUT, 0);
     ctx.restore();
@@ -109,7 +160,7 @@ function draw() {
   ctx.beginPath();
   ctx.arc(0, 0, R, 0, TAU);
   ctx.stroke();
-  for (let j = 0; j < n; j++) {                          // Stangen zwischen den Optionen
+  for (let j = 0; j < n; j++) {                          // pegs between the options
     ctx.save();
     ctx.rotate(j * seg);
     ctx.beginPath();
@@ -126,7 +177,7 @@ function draw() {
   ctx.fill();
   ctx.restore();
 
-  // Biegsame Leiste: Biegelinie eines einseitig eingespannten Balkens mit Auslenkung x an der Spitze
+  // Flexible flap: bending curve of a cantilever beam with tip deflection x
   const s = Math.sqrt(L * L - x * x);
   ctx.strokeStyle = ctx.fillStyle = "#c0392b";
   ctx.lineWidth = 4;
@@ -165,7 +216,7 @@ function frame(now) {
     still = Math.abs(omega) < 0.01 && Math.abs(xd) < 1 ? still + DT : 0;
   }
   draw();
-  if (still > 0.3) {                                     // Rad steht, Leiste ruht zwischen zwei Stangen
+  if (still > 0.3) {                                     // wheel stopped, flap rests between two pegs
     omega = 0;
     theta = wrap(theta);
     btn.hidden = false;
@@ -182,7 +233,22 @@ btn.onclick = () => {
   requestAnimationFrame(frame);
 };
 
+document.getElementById("open").onclick = () => {
+  list.value = options.join("\n");
+  url.value = optionsUrl();
+  dialog.showModal();
+};
+list.oninput = () => {
+  const next = list.value.split("\n").map(s => s.trim()).filter(Boolean);
+  if (next.length) setOptions(next);                     // keep the old options while the field is empty
+  url.value = optionsUrl();
+  draw();
+};
+url.onfocus = () => url.select();
+dialog.onclick = e => { if (e.target === dialog) dialog.close(); };   // click on the backdrop closes
+
 addEventListener("resize", layout);
+setOptions(initial.length ? initial : ["Yes", "No"]);
 layout();
 </script>
 </body>
