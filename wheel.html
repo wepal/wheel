@@ -62,7 +62,7 @@ const initial = (values.length === 1 ? values[0].split(",") : values).map(s => s
 
 // ---- Geometry (logical units; wheel center at CX/CY) ----
 const W = 540, H = 600, CX = W / 2, CY = 334;
-const R = 250, RP = 253, PEG = 4.5, HUB = 42;   // wheel, peg circle, peg radius, button
+const R = 250, RP = 244, PEG = 4.5, HUB = 42;   // wheel, peg circle, peg radius, button
 const TEXT_OUT = R * 0.93, TEXT_IN = HUB * 1.25;
 const TAU = 2 * Math.PI;
 
@@ -167,7 +167,7 @@ function draw() {
     ctx.rotate(j * seg);
     ctx.beginPath();
     ctx.moveTo(0, 0);
-    ctx.lineTo(0, -RP);
+    ctx.lineTo(0, -R);
     ctx.stroke();
     ctx.beginPath();
     ctx.arc(0, -RP, PEG, 0, TAU);
