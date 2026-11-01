@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glücksrad</title>
+<style>
+  html, body { height: 100%; margin: 0; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; background: #fff; }
+  #stage { position: relative; }
+  canvas { display: block; }
+  button {
+    position: absolute; transform: translate(-50%, -50%);
+    border: 0; border-radius: 50%; background: #222; color: #fff;
+    font: 600 16px system-ui, sans-serif; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<div id="stage"><canvas></canvas><button>Drehen</button></div>
+<script>
+"use strict";
+// Aufruf: gluecksrad.html?optionen=Pizza,Pasta,Sushi  (auch mehrfach: ?optionen=A&optionen=B)
+const params = new URLSearchParams(location.search);
+const options = params.getAll("optionen").flatMap(s => s.split(",")).map(s => s.trim()).filter(Boolean);
+if (!options.length) options.push("Ja", "Nein");
+
+// ---- Geometrie (logische Einheiten; Radmittelpunkt bei CX/CY) ----
+const W = 540, H = 600, CX = W / 2, CY = 334;
+const R = 250, RP = 253, PEG = 4.5, HUB = 42;   // Rad, Stangenkreis, Stangenradius, Button
+const TEXT_OUT = R * 0.93, TEXT_IN = HUB * 1.25;
+const TAU = 2 * Math.PI, n = options.length, seg = TAU / n;
+
+// ---- Physik ----
+const I_WHEEL = 40 * RP * RP;          // Trägheitsmoment (entspricht 40 Masseneinheiten am Rand)
+const DRY = 0.16, VISC = 0.15;         // Lagerreibung: trocken (rad/s²) und viskos (1/s)
+const L = 70, TIP = 2, PIVOT_Y = -RP - L + 1;  // Leiste: Länge, Spitzenradius, Aufhängung
+const K = 4000, C = 19;                // Biegesteifigkeit und Dämpfung der Leiste (Spitzenmasse 1)
+const KC = 1e6, CC = 600;              // Kontaktsteifigkeit und -dämpfung Stange/Leiste
+const DT = 1 / 5000;
+
+let theta = Math.random() * TAU, omega = 0;    // Raddrehwinkel (im Uhrzeigersinn) und Winkelgeschwindigkeit
+let x = 0, xd = 0;                             // seitliche Auslenkung der Leistenspitze und ihre Geschwindigkeit
+let last = 0, acc = 0, still = 0, scale = 1;
+
+const stage = document.getElementById("stage");
+const canvas = document.querySelector("canvas");
+const btn = document.querySelector("button");
+const ctx = canvas.getContext("2d");
+
+// Einheitliche Schriftgröße: so groß, dass jede Option radial in ihr Segment passt.
+const font = size => `500 ${size}px system-ui, sans-serif`;
+ctx.font = font(100);
+const g = 1.8 * Math.sin(Math.min(seg, Math.PI) / 2);   // nutzbare Segmentbreite je Radiuseinheit
+const fontSize = Math.min(R * 0.16, ...options.map(o => {
+  const m = ctx.measureText(o).width / 100;             // Textbreite je Schriftgröße
+  return Math.min(g * TEXT_OUT / (1.25 + g * m), (TEXT_OUT - TEXT_IN) / m);
+}));
+
+const wrap = a => a - TAU * Math.round(a / TAU);
+
+function step() {
+  const s = Math.sqrt(L * L - x * x), ty = PIVOT_Y + s, slope = -x / s;  // Spitze läuft auf einem Kreisbogen
+  let fx = -K * x - C * xd, torque = 0;
+  for (let j = 0; j < n; j++) {
+    const f = wrap(theta + j * seg);                    // Winkel der Stange relativ zu "oben"
+    if (Math.abs(f) > 0.6) continue;
+    const c = Math.cos(f), sn = Math.sin(f);
+    const dx = x - RP * sn, dy = ty + RP * c, d = Math.hypot(dx, dy), pen = PEG + TIP - d;
+    if (pen <= 0) continue;
+    const nx = dx / d, ny = dy / d;
+    const vn = (xd - omega * RP * c) * nx + (slope * xd - omega * RP * sn) * ny;
+    const F = Math.max(0, KC * pen - CC * vn);          // Kontaktkraft (Feder + Dämpfer)
+    fx += F * (nx + slope * ny);                        // wirkt auf die Leistenspitze
+    torque -= F * RP * (nx * c + ny * sn);              // Gegenkraft bremst das Rad
+  }
+  xd += fx * DT;
+  x = Math.max(-0.9 * L, Math.min(0.9 * L, x + xd * DT));
+  omega += (torque / I_WHEEL - DRY * Math.tanh(omega / 0.05) - VISC * omega) * DT;
+  theta += omega * DT;
+}
+
+function draw() {
+  const dpr = devicePixelRatio || 1;
+  ctx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  ctx.translate(CX, CY);
+
+  ctx.save();
+  ctx.rotate(theta);
+  ctx.font = font(fontSize);
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  options.forEach((o, i) => {
+    const a0 = i * seg - Math.PI / 2;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.arc(0, 0, R, a0, a0 + seg);
+    ctx.fillStyle = `hsl(${360 * i / n} 55% 85%)`;
+    ctx.fill();
+    ctx.save();
+    ctx.rotate(a0 + seg / 2);                            // Text läuft radial nach außen
+    ctx.fillStyle = "#222";
+    ctx.fillText(o, TEXT_OUT, 0);
+    ctx.restore();
+  });
+  ctx.strokeStyle = ctx.fillStyle = "#333";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(0, 0, R, 0, TAU);
+  ctx.stroke();
+  for (let j = 0; j < n; j++) {                          // Stangen zwischen den Optionen
+    ctx.save();
+    ctx.rotate(j * seg);
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(0, -RP);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(0, -RP, PEG, 0, TAU);
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.beginPath();
+  ctx.arc(0, 0, 10, 0, TAU);
+  ctx.fill();
+  ctx.restore();
+
+  // Biegsame Leiste: Biegelinie eines einseitig eingespannten Balkens mit Auslenkung x an der Spitze
+  const s = Math.sqrt(L * L - x * x);
+  ctx.strokeStyle = ctx.fillStyle = "#c0392b";
+  ctx.lineWidth = 4;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  for (let u = 0; u <= 1.001; u += 0.1) {
+    ctx[u ? "lineTo" : "moveTo"](x * (3 * u * u - u ** 3) / 2, PIVOT_Y + s * u);
+  }
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(0, PIVOT_Y, 6, 0, TAU);
+  ctx.fill();
+}
+
+function layout() {
+  const dpr = devicePixelRatio || 1;
+  scale = Math.min(innerWidth / W, innerHeight / H);
+  canvas.width = Math.round(W * scale * dpr);
+  canvas.height = Math.round(H * scale * dpr);
+  stage.style.width = canvas.style.width = W * scale + "px";
+  stage.style.height = canvas.style.height = H * scale + "px";
+  Object.assign(btn.style, {
+    left: CX * scale + "px", top: CY * scale + "px",
+    width: 2 * HUB * scale + "px", height: 2 * HUB * scale + "px",
+    fontSize: 0.44 * HUB * scale + "px",
+  });
+  draw();
+}
+
+function frame(now) {
+  acc += Math.min(Math.max((now - last) / 1000, 0), 0.05);
+  last = now;
+  for (; acc >= DT; acc -= DT) {
+    step();
+    still = Math.abs(omega) < 0.01 && Math.abs(xd) < 1 ? still + DT : 0;
+  }
+  draw();
+  if (still > 0.3) {                                     // Rad steht, Leiste ruht zwischen zwei Stangen
+    omega = 0;
+    theta = wrap(theta);
+    btn.hidden = false;
+  } else {
+    requestAnimationFrame(frame);
+  }
+}
+
+btn.onclick = () => {
+  omega = 10 + 6 * Math.random();
+  btn.hidden = true;
+  last = performance.now();
+  acc = still = 0;
+  requestAnimationFrame(frame);
+};
+
+addEventListener("resize", layout);
+layout();
+</script>
+</body>
+</html>
