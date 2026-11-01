@@ -8,7 +8,7 @@
   html, body { height: 100%; margin: 0; overflow: hidden; }
   body { display: flex; align-items: center; justify-content: center; background: #fff; }
   #stage { position: relative; }
-  canvas { display: block; }
+  canvas { display: block; cursor: grab; touch-action: none; }
   #spin {
     position: absolute; transform: translate(-50%, -50%);
     border: 0; border-radius: 50%; background: #222; color: #fff;
@@ -77,7 +77,9 @@ const TIME_STEP = 1 / 5000;
 let options, count, segmentAngle, fontSize;    // current options, their count, segment angle, shared font size
 let theta = Math.random() * FULL_TURN, omega = 0;  // wheel angle (clockwise) and angular velocity
 let flapX = 0, flapVelocity = 0;               // sideways deflection of the flap tip and its velocity
-let lastTime = 0, accumulator = 0, stillTime = 0, scale = 1;
+let lastTime = 0, accumulator = 0, stillTime = 0, scale = 1, running = false;
+let dragging = false, dragTarget = 0, dragAngle = 0, dragOmega = 0, dragSamples = [];   // mouse drag state
+const MAX_OMEGA = 40;                          // speed limit (rad/s) for dragging and release, keeps the contact simulation stable
 
 const stage = document.getElementById("stage");
 const canvas = document.querySelector("canvas");
@@ -213,28 +215,73 @@ function layout() {
 }
 
 function frame(now) {
-  accumulator += Math.min(Math.max((now - lastTime) / 1000, 0), 0.05);
+  const elapsed = Math.min(Math.max((now - lastTime) / 1000, 0), 0.05);
+  accumulator += elapsed;
   lastTime = now;
+  if (dragging) {                                        // the wheel follows the mouse; the flap still reacts to the pegs
+    dragOmega = Math.max(-MAX_OMEGA, Math.min(MAX_OMEGA, (dragTarget - theta) / Math.max(elapsed, 0.001)));
+  }
   for (; accumulator >= TIME_STEP; accumulator -= TIME_STEP) {
+    if (dragging) omega = dragOmega;
     step();
-    stillTime = Math.abs(omega) < 0.01 && Math.abs(flapVelocity) < 1 ? stillTime + TIME_STEP : 0;
+    stillTime = !dragging && Math.abs(omega) < 0.01 && Math.abs(flapVelocity) < 1 ? stillTime + TIME_STEP : 0;
   }
   draw();
   if (stillTime > 0.3) {                                 // wheel stopped, flap rests between two pegs
     omega = 0;
     theta = wrap(theta);
     spinButton.hidden = false;
+    running = false;
   } else {
     requestAnimationFrame(frame);
   }
 }
 
-spinButton.onclick = () => {
-  omega = 10 + 6 * Math.random();
-  spinButton.hidden = true;
+function startLoop() {
+  if (running) return;
+  running = true;
   lastTime = performance.now();
   accumulator = stillTime = 0;
   requestAnimationFrame(frame);
+}
+
+spinButton.onclick = () => {
+  omega = 10 + 6 * Math.random();
+  spinButton.hidden = true;
+  startLoop();
+};
+
+// Angle of the mouse around the wheel center, clockwise from "top"
+function pointerAngle(event) {
+  const rect = canvas.getBoundingClientRect();
+  return Math.atan2(event.clientX - rect.left - CENTER_X * scale, -(event.clientY - rect.top - CENTER_Y * scale));
+}
+
+canvas.onpointerdown = event => {                       // pressing the spinning wheel stops it; dragging turns it
+  omega = 0;
+  dragging = true;
+  dragTarget = theta;
+  dragAngle = pointerAngle(event);
+  dragSamples = [{ time: event.timeStamp, angle: dragTarget }];
+  spinButton.hidden = true;
+  canvas.setPointerCapture(event.pointerId);
+  startLoop();
+};
+canvas.onpointermove = event => {
+  if (!dragging) return;
+  const angle = pointerAngle(event);
+  dragTarget += wrap(angle - dragAngle);
+  dragAngle = angle;
+  dragSamples.push({ time: event.timeStamp, angle: dragTarget });
+  while (event.timeStamp - dragSamples[0].time > 100) dragSamples.shift();
+};
+canvas.onpointerup = canvas.onpointercancel = event => {
+  if (!dragging) return;
+  dragging = false;
+  const first = dragSamples[0], lastSample = dragSamples[dragSamples.length - 1];
+  const span = (event.timeStamp - first.time) / 1000;     // release speed from the last 100 ms of movement
+  omega = span > 0.02 && event.timeStamp - lastSample.time < 100
+    ? Math.max(-MAX_OMEGA, Math.min(MAX_OMEGA, (lastSample.angle - first.angle) / span)) : 0;
 };
 
 document.getElementById("open").onclick = () => {
@@ -251,8 +298,6 @@ dialog.onpointerdown = event => {                       // only a press outside 
   const rect = dialog.getBoundingClientRect();
   if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) dialog.close();
 };
-canvas.onpointerdown = () => { omega = 0; };            // pressing the spinning wheel stops it at once
-
 addEventListener("resize", layout);
 setOptions(initial.length ? initial : ["Yes", "No"]);
 layout();
